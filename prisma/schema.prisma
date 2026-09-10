@@ -1,0 +1,436 @@
+// Prisma schema for the Barbershop SaaS (multi-tenant).
+// Docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  OWNER
+  ADMIN
+  BARBER
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  PIX
+  CREDIT_CARD
+  DEBIT_CARD
+  OTHER
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum CommissionStatus {
+  PENDING
+  PAID
+}
+
+enum PlanType {
+  FREE
+  PRO
+  BUSINESS
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  TRIALING
+}
+
+enum NotificationChannel {
+  WHATSAPP
+  EMAIL
+  PUSH
+}
+
+enum NotificationType {
+  APPOINTMENT_CREATED
+  APPOINTMENT_CONFIRMED
+  APPOINTMENT_CANCELLED
+  APPOINTMENT_REMINDER
+  APPOINTMENT_COMPLETED
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Tenant (barbershop)
+// ---------------------------------------------------------------------------
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  logo      String?
+  phone     String?
+  email     String?
+  address   String?
+  city      String?
+  state     String?
+  zipCode   String?  @map("zip_code")
+  timezone  String   @default("America/Sao_Paulo")
+
+  // Booking settings (section 24)
+  minLeadTimeMinutes    Int     @default(60) @map("min_lead_time_minutes")
+  maxFutureDays         Int     @default(60) @map("max_future_days")
+  allowCancellation     Boolean @default(true) @map("allow_cancellation")
+  minCancelTimeMinutes  Int     @default(120) @map("min_cancel_time_minutes")
+  slotIntervalMinutes   Int     @default(30) @map("slot_interval_minutes")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  users         User[]
+  barbers       Barber[]
+  customers     Customer[]
+  services      Service[]
+  appointments  Appointment[]
+  workingHours  WorkingHours[]
+  blockedTimes  BlockedTime[]
+  transactions  FinancialTransaction[]
+  commissions   Commission[]
+  subscription  Subscription?
+  notifications Notification[]
+  auditLogs     AuditLog[]
+
+  @@map("tenants")
+}
+
+// ---------------------------------------------------------------------------
+// User (authentication + roles)
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  tenantId     String   @map("tenant_id")
+  name         String
+  email        String
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(OWNER)
+  avatar       String?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  barber    Barber?
+  auditLogs AuditLog[]
+
+  // Email is unique per tenant, not globally (multi-tenant).
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Barber
+// ---------------------------------------------------------------------------
+
+model Barber {
+  id                   String   @id @default(cuid())
+  tenantId             String   @map("tenant_id")
+  userId               String?  @unique @map("user_id")
+  name                 String
+  phone                String?
+  email                String?
+  avatar               String?
+  bio                  String?
+  specialties          String[] @default([])
+  commissionPercentage Decimal  @default(40) @map("commission_percentage") @db.Decimal(5, 2)
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  appointments Appointment[]
+  workingHours WorkingHours[]
+  blockedTimes BlockedTime[]
+  transactions FinancialTransaction[]
+  commissions  Commission[]
+
+  @@index([tenantId])
+  @@index([tenantId, active])
+  @@map("barbers")
+}
+
+// ---------------------------------------------------------------------------
+// Customer
+// ---------------------------------------------------------------------------
+
+model Customer {
+  id          String    @id @default(cuid())
+  tenantId    String    @map("tenant_id")
+  name        String
+  phone       String
+  email       String?
+  birthDate   DateTime? @map("birth_date")
+  notes       String?
+  active      Boolean   @default(true)
+  lastVisitAt DateTime? @map("last_visit_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@unique([tenantId, phone])
+  @@index([tenantId])
+  @@index([tenantId, name])
+  @@map("customers")
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+model Service {
+  id              String   @id @default(cuid())
+  tenantId        String   @map("tenant_id")
+  name            String
+  description     String?
+  durationMinutes Int      @map("duration_minutes")
+  price           Decimal  @db.Decimal(10, 2)
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([tenantId])
+  @@index([tenantId, active])
+  @@map("services")
+}
+
+// ---------------------------------------------------------------------------
+// Appointment
+// ---------------------------------------------------------------------------
+
+model Appointment {
+  id            String            @id @default(cuid())
+  tenantId      String            @map("tenant_id")
+  customerId    String            @map("customer_id")
+  barberId      String            @map("barber_id")
+  serviceId     String            @map("service_id")
+  date          DateTime          @db.Date
+  startTime     DateTime          @map("start_time")
+  endTime       DateTime          @map("end_time")
+  status        AppointmentStatus @default(SCHEDULED)
+  price         Decimal           @db.Decimal(10, 2)
+  paymentStatus PaymentStatus     @default(PENDING) @map("payment_status")
+  paymentMethod PaymentMethod?    @map("payment_method")
+  notes         String?
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  tenant       Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customer     Customer               @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  barber       Barber                 @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  service      Service                @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  transactions FinancialTransaction[]
+  commission   Commission?
+  notifications Notification[]
+
+  @@index([tenantId])
+  @@index([tenantId, date])
+  @@index([tenantId, barberId, startTime])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+  @@map("appointments")
+}
+
+// ---------------------------------------------------------------------------
+// Working hours (per barber, per weekday)
+// ---------------------------------------------------------------------------
+
+model WorkingHours {
+  id        String  @id @default(cuid())
+  tenantId  String  @map("tenant_id")
+  barberId  String  @map("barber_id")
+  dayOfWeek Int     @map("day_of_week") // 0 = Sunday ... 6 = Saturday
+  startTime String  @map("start_time") // "HH:mm"
+  endTime   String  @map("end_time") // "HH:mm"
+  active    Boolean @default(true)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+
+  @@unique([barberId, dayOfWeek, startTime])
+  @@index([tenantId])
+  @@index([barberId])
+  @@map("working_hours")
+}
+
+// ---------------------------------------------------------------------------
+// Blocked time (lunch, vacation, day off, meeting)
+// ---------------------------------------------------------------------------
+
+model BlockedTime {
+  id        String   @id @default(cuid())
+  tenantId  String   @map("tenant_id")
+  barberId  String   @map("barber_id")
+  date      DateTime @db.Date
+  startTime DateTime @map("start_time")
+  endTime   DateTime @map("end_time")
+  reason    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  barber Barber @relation(fields: [barberId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([barberId, date])
+  @@map("blocked_times")
+}
+
+// ---------------------------------------------------------------------------
+// Financial transaction
+// ---------------------------------------------------------------------------
+
+model FinancialTransaction {
+  id              String          @id @default(cuid())
+  tenantId        String          @map("tenant_id")
+  appointmentId   String?         @map("appointment_id")
+  barberId        String?         @map("barber_id")
+  type            TransactionType
+  amount          Decimal         @db.Decimal(10, 2)
+  description     String?
+  paymentMethod   PaymentMethod?  @map("payment_method")
+  transactionDate DateTime        @map("transaction_date")
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  barber      Barber?      @relation(fields: [barberId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, transactionDate])
+  @@index([tenantId, type])
+  @@map("financial_transactions")
+}
+
+// ---------------------------------------------------------------------------
+// Commission
+// ---------------------------------------------------------------------------
+
+model Commission {
+  id            String           @id @default(cuid())
+  tenantId      String           @map("tenant_id")
+  barberId      String           @map("barber_id")
+  appointmentId String           @unique @map("appointment_id")
+  percentage    Decimal          @db.Decimal(5, 2)
+  amount        Decimal          @db.Decimal(10, 2)
+  status        CommissionStatus @default(PENDING)
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  barber      Barber      @relation(fields: [barberId], references: [id], onDelete: Cascade)
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([tenantId, barberId])
+  @@index([tenantId, status])
+  @@map("commissions")
+}
+
+// ---------------------------------------------------------------------------
+// Subscription (SaaS plans - architecture ready for Stripe/Mercado Pago)
+// ---------------------------------------------------------------------------
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  tenantId             String             @unique @map("tenant_id")
+  plan                 PlanType           @default(FREE)
+  status               SubscriptionStatus @default(ACTIVE)
+  externalCustomerId   String?            @map("external_customer_id")
+  externalSubscriptionId String?          @map("external_subscription_id")
+  currentPeriodEnd     DateTime?          @map("current_period_end")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+// Notification (architecture ready for WhatsApp/Email/Push)
+// ---------------------------------------------------------------------------
+
+model Notification {
+  id            String              @id @default(cuid())
+  tenantId      String              @map("tenant_id")
+  appointmentId String?             @map("appointment_id")
+  channel       NotificationChannel
+  type          NotificationType
+  status        NotificationStatus  @default(PENDING)
+  recipient     String
+  payload       Json?
+  scheduledFor  DateTime?           @map("scheduled_for")
+  sentAt        DateTime?           @map("sent_at")
+  createdAt     DateTime            @default(now()) @map("created_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([status, scheduledFor])
+  @@map("notifications")
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (section 34)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  tenantId   String   @map("tenant_id")
+  userId     String?  @map("user_id")
+  action     String
+  entity     String
+  entityId   String?  @map("entity_id")
+  oldData    Json?    @map("old_data")
+  newData    Json?    @map("new_data")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([tenantId, entity])
+  @@map("audit_logs")
+}

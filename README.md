@@ -1,36 +1,139 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# BarberFlow — SaaS de gestão de barbearias
 
-## Getting Started
+Sistema multi-tenant para barbearias: agendamento online, dashboard financeiro,
+gestão de clientes/barbeiros/serviços, comissões, notificações e relatórios.
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Next.js 16** (App Router, Server Components, Server Actions, Turbopack)
+- **TypeScript** (strict)
+- **Tailwind CSS v4** + componentes próprios (estilo shadcn/ui) + dark mode
+- **Prisma 6** + **PostgreSQL** (Supabase)
+- **Auth.js v5** (NextAuth) — login por email/senha, senhas com bcrypt
+- **Recharts** (gráficos), **Sonner** (toasts), **Zod** + **React Hook Form**
+- **Vitest** (testes unitários das regras de negócio)
+
+## Pré-requisitos
+
+- Node.js 20+ (recomendado 22 LTS)
+- Um banco PostgreSQL (ex.: Supabase)
+
+## Configuração
+
+1. Instale as dependências:
+
+   ```bash
+   npm install
+   ```
+
+2. Copie as variáveis de ambiente e preencha:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Variáveis essenciais para começar:
+
+   - `DATABASE_URL` e `DIRECT_URL` — conexão do Postgres/Supabase
+   - `AUTH_SECRET` — gere com `openssl rand -base64 32`
+   - `NEXT_PUBLIC_APP_URL` — ex.: `http://localhost:3000`
+   - `CRON_SECRET` — protege o endpoint de lembretes
+
+3. Crie as tabelas e popule dados de teste:
+
+   ```bash
+   npm run db:migrate   # aplica as migrations
+   npm run db:seed      # popula uma barbearia de demonstração
+   ```
+
+4. Rode o projeto:
+
+   ```bash
+   npm run dev
+   ```
+
+   Acesse http://localhost:3000
+
+### Login de demonstração (após o seed)
+
+- **Proprietário:** `dono@barbeariamodelo.com` / `senha1234`
+- **Barbeiro:** `joao@barbeariamodelo.com` / `senha1234`
+- **Página pública de agendamento:** `/barbearia/barbearia-modelo/agendar`
+
+## Scripts
+
+| Script              | Descrição                                   |
+| ------------------- | ------------------------------------------- |
+| `npm run dev`       | Servidor de desenvolvimento                 |
+| `npm run build`     | Build de produção                           |
+| `npm run start`     | Servidor de produção                        |
+| `npm run lint`      | ESLint                                      |
+| `npm test`          | Testes (Vitest)                             |
+| `npm run db:migrate`| Cria/atualiza o schema (prisma migrate dev) |
+| `npm run db:deploy` | Aplica migrations em produção               |
+| `npm run db:seed`   | Popula dados de demonstração                |
+| `npm run db:studio` | Abre o Prisma Studio                        |
+
+## Arquitetura
+
+```
+app/
+  (auth)/            # login, registro, recuperação de senha
+  (app)/             # área autenticada (sidebar + bottom nav)
+    dashboard/ agendamentos/ clientes/ barbeiros/
+    servicos/ financeiro/ relatorios/ configuracoes/
+  barbearia/[slug]/agendar/   # página pública de agendamento (sem login)
+  api/                        # route handlers (auth, cron, ics, export)
+components/          # UI e componentes por domínio
+lib/
+  auth/ permissions/          # sessão, roles, guards
+  services/                   # regras de negócio (acesso ao banco)
+  actions/                    # server actions (validação + permissão + audit)
+  availability/               # algoritmo de disponibilidade (puro + DB)
+  validations/                # schemas Zod
+  notifications/              # templates, wa.me, provider
+prisma/             # schema + seed
+tests/              # testes unitários (Vitest)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Princípios: multi-tenancy rigoroso (o `tenant_id` vem sempre da sessão, nunca do
+cliente), regras de negócio na camada de serviços, validação com Zod em toda
+entrada, soft delete para dados importantes e auditoria das mutações.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Frontend/API — Vercel
 
-## Learn More
+- Conecte o repositório na Vercel.
+- Configure as variáveis de ambiente (as mesmas do `.env`).
+- O build roda `next build`. Rode `npm run db:deploy` no fluxo de deploy do banco.
 
-To learn more about Next.js, take a look at the following resources:
+### Banco — Supabase
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Use a connection string com pooler (porta 6543) em `DATABASE_URL` e a conexão
+  direta (porta 5432) em `DIRECT_URL`.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### Lembretes — Vercel Cron
 
-## Deploy on Vercel
+- O arquivo `vercel.json` agenda `/api/cron/reminders` de hora em hora.
+- Defina `CRON_SECRET` no ambiente da Vercel; o endpoint valida o header
+  `Authorization: Bearer <CRON_SECRET>`.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Integrações preparadas (não obrigatórias no MVP)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- **WhatsApp:** `WHATSAPP_API_URL` / `WHATSAPP_API_KEY` (Cloud API ou Evolution)
+- **Email:** `RESEND_API_KEY`
+- **Billing:** `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`
+
+  Sem essas variáveis, notificações são registradas mas não enviadas, e a troca
+  de plano funciona sem cobrança real (arquitetura pronta para plugar o gateway).
+
+## Testes
+
+```bash
+npm test
+```
+
+Cobrem as regras críticas: algoritmo de disponibilidade (conflitos, duração,
+bloqueios, antecedência), cálculo de comissão, permissões por role, geração de
+mensagens/links/CSV/ICS e resolução de períodos.
